@@ -1,2 +1,2 @@
 # SPPACEU
-Social Practicies of Public Audit of Corruption Exposure in Ukraine
+Social Practices of Public Audit of Corruption Exposure in Ukraine
