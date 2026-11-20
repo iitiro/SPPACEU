@@ -5,8 +5,8 @@ Version: 1.0
 Purpose
 -------
 This application is a custom Python client developed exclusively for an academic
-PhD research project investigating the transformation of cinematic heroes and
-their reception in public discourse using YouTube.
+research project investigating public audit and corruption exposure in Ukraine
+through YouTube content.
 
 The application retrieves only publicly available information through the
 official YouTube Data API v3 and does not modify, upload, delete, or interact
@@ -57,8 +57,8 @@ research.
 
 Compliance
 ----------
-This software complies with the YouTube Data API Terms of Service.
-It accesses only publicly available resources through the official API,
+Review the YouTube Data API Terms of Service before collecting data.
+This client accesses only publicly available resources through the official API,
 implements request pagination and rate limiting, and is intended solely for
 non-commercial academic research.
 
@@ -87,9 +87,10 @@ import pandas as pd
 import requests
 
 
-DEFAULT_API_KEY_FILE = "/Users/ikudinov/Documents/keys/api_yt.txt"
-DEFAULT_CHANNELS_FILE = "/Users/ikudinov/Documents/youtube_cyr.txt"
-DEFAULT_OUTPUT_DIR = "/Users/ikudinov/Documents/!youtube_downloader_NEW_2/"
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_API_KEY_FILE = str(BASE_DIR / "keys" / "youtube_api_key.txt")
+DEFAULT_CHANNELS_FILE = str(BASE_DIR / "channels.txt")
+DEFAULT_OUTPUT_DIR = str(BASE_DIR / "outputs" / "youtube")
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 YOUTUBE_BASE_URL = "https://www.youtube.com"
@@ -171,20 +172,26 @@ class YouTubeDataAPI:
         if self.delay:
             time.sleep(self.delay)
 
-        response = self.session.get(
-            f"{YOUTUBE_API_BASE}/{resource.lstrip('/')}",
-            params=request_params,
-            timeout=REQUEST_TIMEOUT,
-        )
+        try:
+            response = self.session.get(
+                f"{YOUTUBE_API_BASE}/{resource.lstrip('/')}",
+                params=request_params,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            # Requests errors can contain the URL query, including the API key.
+            raise YouTubeAPIError(f"{resource}: network request failed ({type(exc).__name__})") from None
 
         try:
             payload = response.json()
         except ValueError:
-            payload = {}
+            raise YouTubeAPIError(f"{resource}: server returned invalid JSON (HTTP {response.status_code})") from None
+        if not isinstance(payload, dict):
+            raise YouTubeAPIError(f"{resource}: server returned an unexpected response format")
 
         if response.status_code >= 400:
             error = payload.get("error", {}) if isinstance(payload, dict) else {}
-            message = error.get("message") or response.text.strip() or response.reason
+            message = str(error.get("message") or response.text.strip() or response.reason).replace(self.api_key, "[redacted]")
             raise YouTubeAPIError(f"{resource}: HTTP {response.status_code}: {message}")
 
         return payload
@@ -485,8 +492,8 @@ def save_rows(rows: list[dict[str, Any]], base_path: Path, sheet_name: str) -> P
 
     base_path.parent.mkdir(parents=True, exist_ok=True)
 
-    json_path = base_path.with_suffix(".json")
-    xlsx_path = base_path.with_suffix(".xlsx")
+    json_path = base_path.parent / (base_path.name + ".json")
+    xlsx_path = base_path.parent / (base_path.name + ".xlsx")
 
     with open(json_path, "w", encoding="utf-8") as file:
         json.dump(rows, file, ensure_ascii=False, indent=2)
@@ -496,7 +503,7 @@ def save_rows(rows: list[dict[str, Any]], base_path: Path, sheet_name: str) -> P
     with pd.ExcelWriter(
         xlsx_path,
         engine="xlsxwriter",
-        engine_kwargs={"options": {"strings_to_urls": False}},
+        engine_kwargs={"options": {"strings_to_urls": False, "strings_to_formulas": False}},
     ) as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name[:31])
 
@@ -1117,7 +1124,12 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    validate_file(args.input, "Channels file")
+    if args.delay < 0 or args.limit_channels < 0:
+        parser.error("--delay and --limit-channels must be nonnegative")
+    if min(args.shorts_before_cutoff_seconds, args.shorts_after_cutoff_seconds) < 0:
+        parser.error("Shorts duration thresholds must be nonnegative")
+    if not Path(args.input).is_file():
+        parser.error(f"Channels file not found: {args.input}. Copy channels.example.txt to channels.txt first.")
 
     api_key = read_api_key(args.api_key_file) or os.getenv("YOUTUBE_API_KEY")
     if not api_key:
@@ -1185,7 +1197,7 @@ def main() -> int:
     )
 
     print("\nProcessing complete.")
-    return 0
+    return 1 if failed_items else 0
 
 
 if __name__ == "__main__":

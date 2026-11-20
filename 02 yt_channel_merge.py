@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 import pandas as pd
 
@@ -5,8 +6,9 @@ import pandas as pd
 # =========================
 # CONFIGURATION
 # =========================
-INPUT_DIR = Path("/Users/ikudinov/Documents/!youtube_downloader_NEW")
-OUTPUT_FILE = Path("/Users/ikudinov/Documents/!youtube_downloader_NEW/youtube_merged.xlsx")
+BASE_DIR = Path(__file__).resolve().parent
+INPUT_DIR = BASE_DIR / "outputs" / "youtube"
+OUTPUT_FILE = BASE_DIR / "outputs" / "youtube_merged.xlsx"
 
 
 REQUIRED_COLUMNS = [
@@ -301,6 +303,9 @@ def load_excel_file(path: Path) -> pd.DataFrame:
     )
 
     df = normalize_columns(df)
+    # API export field names differ from legacy yt-dlp names.
+    aliases = {"video_id": "id", "video_title": "title", "video_url": "webpage_url", "published_at": "upload_date"}
+    df = df.rename(columns={old: new for old, new in aliases.items() if new not in df.columns})
     df = ensure_required_columns(df)
 
     df = force_text_columns(df)
@@ -336,7 +341,8 @@ def get_excel_files(input_dir: Path) -> list[Path]:
 
     files = [
         file for file in files
-        if not file.name.startswith("~$")
+        if any(file.name.endswith(suffix) for suffix in SECTION_SUFFIXES)
+        and not file.name.startswith("~$")
         and file.resolve() != OUTPUT_FILE.resolve()
         and file.name != "youtube_merged_failed_files.xlsx"
     ]
@@ -350,10 +356,11 @@ def save_result(result: pd.DataFrame, output_file: Path) -> None:
     Disables automatic URL conversion to avoid Excel hyperlink issues.
     """
 
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(
         output_file,
         engine="xlsxwriter",
-        engine_kwargs={"options": {"strings_to_urls": False}},
+        engine_kwargs={"options": {"strings_to_urls": False, "strings_to_formulas": False}},
     ) as writer:
         result.to_excel(writer, index=False, sheet_name="youtube_data")
 
@@ -376,15 +383,21 @@ def save_result(result: pd.DataFrame, output_file: Path) -> None:
 # MAIN
 # =========================
 def main():
+    global INPUT_DIR, OUTPUT_FILE
+    parser = argparse.ArgumentParser(description="Merge video/stream/short exports into a flat legacy table. Use build_research_workbook.py for the AI notebooks.")
+    parser.add_argument("--input-dir", type=Path, default=INPUT_DIR)
+    parser.add_argument("--output", type=Path, default=OUTPUT_FILE)
+    args = parser.parse_args()
+    INPUT_DIR, OUTPUT_FILE = args.input_dir, args.output
     if not INPUT_DIR.exists():
         print(f"Input folder does not exist: {INPUT_DIR}")
-        return
+        return 2
 
     files = get_excel_files(INPUT_DIR)
 
     if not files:
         print("No Excel files found.")
-        return
+        return 2
 
     frames = []
     failed_files = []
@@ -421,7 +434,7 @@ def main():
 
     if not frames:
         print("No data imported.")
-        return
+        return 2
 
     result = pd.concat(frames, ignore_index=True)
 
@@ -444,7 +457,7 @@ def main():
         with pd.ExcelWriter(
             failed_output,
             engine="xlsxwriter",
-            engine_kwargs={"options": {"strings_to_urls": False}},
+            engine_kwargs={"options": {"strings_to_urls": False, "strings_to_formulas": False}},
         ) as writer:
             failed_df.to_excel(writer, index=False, sheet_name="failed_files")
 
